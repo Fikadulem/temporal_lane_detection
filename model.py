@@ -64,7 +64,28 @@ class ConvLSTM(nn.Module):
         return outputs
 
 
-class LaneDetectionModel(nn.Module):
+def build_decoder(input_dim):
+
+    return nn.Sequential(
+
+        nn.ConvTranspose2d(input_dim, 128, 2, stride=2),
+        nn.ReLU(),
+
+        nn.ConvTranspose2d(128, 64, 2, stride=2),
+        nn.ReLU(),
+
+        nn.ConvTranspose2d(64, 32, 2, stride=2),
+        nn.ReLU(),
+
+        nn.ConvTranspose2d(32, 16, 2, stride=2),
+        nn.ReLU(),
+
+        nn.ConvTranspose2d(16, 1, 2, stride=2),
+        nn.Sigmoid()
+    )
+
+
+class ConvLSTMLaneDetectionModel(nn.Module):
 
     def __init__(self):
         super().__init__()
@@ -75,23 +96,7 @@ class LaneDetectionModel(nn.Module):
 
         self.convlstm = ConvLSTM(512, 256)
 
-        self.decoder = nn.Sequential(
-
-            nn.ConvTranspose2d(256, 128, 2, stride=2),
-            nn.ReLU(),
-
-            nn.ConvTranspose2d(128, 64, 2, stride=2),
-            nn.ReLU(),
-
-            nn.ConvTranspose2d(64, 32, 2, stride=2),
-            nn.ReLU(),
-
-            nn.ConvTranspose2d(32, 16, 2, stride=2),
-            nn.ReLU(),
-
-            nn.ConvTranspose2d(16, 1, 2, stride=2),
-            nn.Sigmoid()
-        )
+        self.decoder = build_decoder(256)
 
     def forward(self, x):
 
@@ -111,3 +116,57 @@ class LaneDetectionModel(nn.Module):
         output = self.decoder(temporal[:, -1])
 
         return output
+
+
+class CNNLaneDetectionModel(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+
+        resnet = models.resnet18(weights="DEFAULT")
+
+        self.encoder = nn.Sequential(*list(resnet.children())[:-2])
+
+        self.temporal_projection = nn.Sequential(
+            nn.Conv2d(512, 256, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.ReLU()
+        )
+
+        self.decoder = build_decoder(256)
+
+    def forward(self, x):
+
+        B, T, C, H, W = x.shape
+
+        features = []
+
+        for t in range(T):
+
+            f = self.encoder(x[:, t])
+            features.append(f)
+
+        features = torch.stack(features, dim=1)
+        aggregated = features.mean(dim=1)
+        projected = self.temporal_projection(aggregated)
+
+        output = self.decoder(projected)
+
+        return output
+
+
+class LaneDetectionModel(ConvLSTMLaneDetectionModel):
+
+    pass
+
+
+def get_model(model_type="convlstm"):
+
+    if model_type == "convlstm":
+        return ConvLSTMLaneDetectionModel()
+
+    if model_type == "cnn":
+        return CNNLaneDetectionModel()
+
+    raise ValueError(f"Unsupported model_type: {model_type}. Use 'convlstm' or 'cnn'.")

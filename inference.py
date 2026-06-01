@@ -1,16 +1,47 @@
+import argparse
 import cv2
 import torch
 import numpy as np
 import os
 from collections import deque
 
-from model import LaneDetectionModel
+from model import get_model
 
+
+def resolve_weights_path(model_type, weights_path=None):
+    if weights_path is not None:
+        return weights_path
+
+    if model_type == "convlstm" and os.path.exists("lane_model.pth"):
+        return "lane_model.pth"
+
+    return f"lane_model_{model_type}.pth"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run lane detection inference on a video.")
+    parser.add_argument("--weights", default=None, type=str)
+    parser.add_argument("--model_type", default="convlstm", choices=["convlstm", "cnn"])
+    parser.add_argument("--video_path", default="challenge (1).mp4", type=str)
+    parser.add_argument("--seq_len", default=5, type=int)
+    parser.add_argument("--img_size", default=224, type=int)
+    parser.add_argument("--output_dir", default="inference_output", type=str)
+    parser.add_argument("--threshold", default=0.35, type=float)
+    return parser.parse_args()
+
+
+args = parse_args()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model = LaneDetectionModel().to(device)
-model.load_state_dict(torch.load("lane_model.pth", map_location=device))
+weights_path = resolve_weights_path(args.model_type, args.weights)
+if not os.path.exists(weights_path):
+    raise FileNotFoundError(
+        f"Weights file not found: {weights_path}. Train the {args.model_type} model first or pass --weights explicitly."
+    )
+
+model = get_model(args.model_type).to(device)
+model.load_state_dict(torch.load(weights_path, map_location=device))
 model.eval()
 
 
@@ -89,12 +120,12 @@ def draw_detected_lane_lines(frame, prob, threshold=0.35):
     return cv2.addWeighted(frame, 0.75, overlay, 0.45, 0), lines_drawn
 
 
-sequence = deque(maxlen=5)
-output_dir = "inference_output"
+sequence = deque(maxlen=args.seq_len)
+output_dir = args.output_dir
 os.makedirs(output_dir, exist_ok=True)
 frame_idx = 0
 
-cap = cv2.VideoCapture("challenge (1).mp4")
+cap = cv2.VideoCapture(args.video_path)
 
 while True:
 
@@ -103,7 +134,7 @@ while True:
     if not ret:
         break
 
-    img = cv2.resize(frame, (224, 224))
+    img = cv2.resize(frame, (args.img_size, args.img_size))
     rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
     tensor = torch.tensor(rgb).permute(2, 0, 1).float() / 255
@@ -113,7 +144,7 @@ while True:
     # Always extract visible lane lines using classical CV.
     frame_with_lanes = draw_classic_lanes(frame)
 
-    if len(sequence) == 5:
+    if len(sequence) == args.seq_len:
 
         input_tensor = torch.stack(list(sequence))
         input_tensor = input_tensor.unsqueeze(0).to(device)
@@ -123,17 +154,17 @@ while True:
             pred = model(input_tensor)
 
         prob = pred[0, 0].cpu().numpy()
-        lane_ratio = float((prob > 0.35).mean())
+        lane_ratio = float((prob > args.threshold).mean())
 
         if lane_ratio > 0.002:
             frame_with_lanes, detected_lines = draw_detected_lane_lines(
                 frame_with_lanes,
                 prob,
-                threshold=0.35
+                threshold=args.threshold
             )
 
             if detected_lines == 0:
-                mask = (prob > 0.35).astype(np.uint8) * 255
+                mask = (prob > args.threshold).astype(np.uint8) * 255
                 mask = cv2.resize(mask, (frame.shape[1], frame.shape[0]))
                 overlay = frame_with_lanes.copy()
                 overlay[mask > 0] = [0, 255, 0]

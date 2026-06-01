@@ -1,42 +1,72 @@
+import argparse
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from dataset import LaneVideoDataset
-from model import LaneDetectionModel
+from model import get_model
 
 
-frames_path = "dataset/frames"
-masks_path = "dataset/masks"
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train lane detection models.")
+    parser.add_argument("--frames_path", default="dataset/frames", type=str)
+    parser.add_argument("--masks_path", default="dataset/masks", type=str)
+    parser.add_argument("--seq_len", default=5, type=int)
+    parser.add_argument("--img_size", default=224, type=int)
+    parser.add_argument("--batch_size", default=2, type=int)
+    parser.add_argument("--epochs", default=10, type=int)
+    parser.add_argument("--lr", default=1e-4, type=float)
+    parser.add_argument("--model_type", default="convlstm", choices=["convlstm", "cnn"])
+    parser.add_argument("--weights_out", default=None, type=str)
+    return parser.parse_args()
 
-dataset = LaneVideoDataset(frames_path, masks_path, seq_len=5)
 
-loader = DataLoader(dataset, batch_size=2, shuffle=True)
+def main():
+    args = parse_args()
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dataset = LaneVideoDataset(
+        args.frames_path,
+        args.masks_path,
+        seq_len=args.seq_len,
+        img_size=(args.img_size, args.img_size),
+    )
 
-model = LaneDetectionModel().to(device)
+    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
-criterion = nn.BCELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-epochs = 10
+    model = get_model(args.model_type).to(device)
 
-for epoch in range(epochs):
+    criterion = nn.BCELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-    for frames, masks in loader:
+    for epoch in range(args.epochs):
 
-        frames = frames.to(device)
-        masks = masks[:, -1].to(device)
+        for frames, masks in loader:
 
-        preds = model(frames)
+            frames = frames.to(device)
+            masks = masks[:, -1].to(device)
 
-        loss = criterion(preds, masks)
+            preds = model(frames)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            loss = criterion(preds, masks)
 
-    print("Epoch:", epoch, "Loss:", loss.item())
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-torch.save(model.state_dict(), "lane_model.pth")
+        print("Epoch:", epoch, "Loss:", loss.item())
+
+    if args.weights_out is not None:
+        weights_out = args.weights_out
+    elif args.model_type == "convlstm":
+        weights_out = "lane_model.pth"
+    else:
+        weights_out = f"lane_model_{args.model_type}.pth"
+
+    torch.save(model.state_dict(), weights_out)
+    print("Saved weights to", weights_out)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,10 +1,22 @@
 import argparse
+import os
+import time
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from dataset import LaneVideoDataset
-from model import LaneDetectionModel
+from model import get_model
+
+
+def resolve_weights_path(model_type, weights_path=None):
+    if weights_path is not None:
+        return weights_path
+
+    if model_type == "convlstm" and os.path.exists("lane_model.pth"):
+        return "lane_model.pth"
+
+    return f"lane_model_{model_type}.pth"
 
 
 def compute_batch_metrics(preds, targets, threshold=0.35, eps=1e-8):
@@ -52,14 +64,40 @@ def evaluate(args):
 
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
-    model = LaneDetectionModel().to(device)
-    model.load_state_dict(torch.load(args.weights, map_location=device))
+    weights_path = resolve_weights_path(args.model_type, args.weights)
+    if not os.path.exists(weights_path):
+        raise FileNotFoundError(
+            f"Weights file not found: {weights_path}. Train the {args.model_type} model first or pass --weights explicitly."
+        )
+
+    model = get_model(args.model_type).to(device)
+    state_dict = torch.load(weights_path, map_location=device)
+    try:
+        model.load_state_dict(state_dict)
+    except RuntimeError as e:
+        # Provide a concise, actionable message for model/checkpoint mismatch.
+        if args.model_type == "cnn" and any(k.startswith("convlstm.") for k in state_dict.keys()):
+            raise ValueError(
+                f"Checkpoint '{weights_path}' appears to be a ConvLSTM model, but --model_type is 'cnn'. "
+                "Use --weights lane_model_cnn.pth or switch --model_type convlstm."
+            ) from e
+        if args.model_type == "convlstm" and any(k.startswith("temporal_projection.") for k in state_dict.keys()):
+            raise ValueError(
+                f"Checkpoint '{weights_path}' appears to be a CNN baseline model, but --model_type is 'convlstm'. "
+                "Use --weights lane_model.pth (or lane_model_convlstm.pth) or switch --model_type cnn."
+            ) from e
+        raise ValueError(
+            f"Failed to load checkpoint '{weights_path}' for model_type '{args.model_type}'. "
+            "Verify the checkpoint was trained for the same model architecture."
+        ) from e
     model.eval()
 
     total_tp = torch.tensor(0.0, device=device)
     total_fp = torch.tensor(0.0, device=device)
     total_fn = torch.tensor(0.0, device=device)
     total_tn = torch.tensor(0.0, device=device)
+    total_infer_time = 0.0
+    total_samples = 0
 
     running_loss = 0.0
     num_batches = 0
@@ -70,7 +108,10 @@ def evaluate(args):
             frames = frames.to(device)
             targets = masks[:, -1].to(device)
 
+            start = time.perf_counter()
             preds = model(frames)
+            total_infer_time += time.perf_counter() - start
+            total_samples += frames.size(0)
 
             if preds.shape[-2:] != targets.shape[-2:]:
                 preds = F.interpolate(
@@ -96,6 +137,9 @@ def evaluate(args):
     f1 = 2.0 * precision * recall / (precision + recall + eps)
     iou = total_tp / (total_tp + total_fp + total_fn + eps)
     dice = 2.0 * total_tp / (2.0 * total_tp + total_fp + total_fn + eps)
+    avg_latency_ms = (total_infer_time / max(total_samples, 1)) * 1000.0
+    seq_per_sec = total_samples / max(total_infer_time, eps)
+    frames_per_sec = (total_samples * args.seq_len) / max(total_infer_time, eps)
 
     print("Evaluation Results")
     print("------------------")
@@ -108,17 +152,24 @@ def evaluate(args):
     print(f"F1 Score: {f1.item():.6f}")
     print(f"IoU: {iou.item():.6f}")
     print(f"Dice: {dice.item():.6f}")
+    print("Inference Speed")
+    print("---------------")
+    print(f"Total Inference Time (s): {total_infer_time:.4f}")
+    print(f"Avg Latency (ms/sample): {avg_latency_ms:.3f}")
+    print(f"Throughput (seq/s): {seq_per_sec:.3f}")
+    print(f"Throughput (frames/s): {frames_per_sec:.3f}")
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate lane segmentation against ground truth masks.")
     parser.add_argument("--frames_path", default="dataset/frames", type=str)
     parser.add_argument("--masks_path", default="dataset/masks", type=str)
-    parser.add_argument("--weights", default="lane_model.pth", type=str)
+    parser.add_argument("--weights", default=None, type=str)
     parser.add_argument("--seq_len", default=5, type=int)
     parser.add_argument("--img_size", default=224, type=int)
     parser.add_argument("--batch_size", default=2, type=int)
     parser.add_argument("--threshold", default=0.35, type=float)
+    parser.add_argument("--model_type", default="convlstm", choices=["convlstm", "cnn"])
     return parser.parse_args()
 
 
