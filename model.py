@@ -4,6 +4,18 @@ import torchvision.models as models
 
 
 class ConvLSTMCell(nn.Module):
+    """Single convolutional LSTM cell.
+
+    Computes the four gates (input, forget, output, cell) from the
+    concatenation of the current spatial input and the previous hidden
+    state using one shared 2-D convolution, then updates the cell and
+    hidden state tensors.
+
+    Args:
+        input_dim (int): Number of channels in the input feature map.
+        hidden_dim (int): Number of channels in the hidden state.
+        kernel_size (int): Spatial kernel size for the gate convolution.
+    """
 
     def __init__(self, input_dim, hidden_dim, kernel_size=3):
         super().__init__()
@@ -20,7 +32,17 @@ class ConvLSTMCell(nn.Module):
         self.hidden_dim = hidden_dim
 
     def forward(self, x, h, c):
+        """Perform one ConvLSTM step.
 
+        Args:
+            x (torch.Tensor): Input feature map, shape (B, input_dim, H, W).
+            h (torch.Tensor): Previous hidden state, shape (B, hidden_dim, H, W).
+            c (torch.Tensor): Previous cell state, shape (B, hidden_dim, H, W).
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: Updated hidden state and cell
+            state, both of shape (B, hidden_dim, H, W).
+        """
         combined = torch.cat([x, h], dim=1)
 
         gates = self.conv(combined)
@@ -39,6 +61,15 @@ class ConvLSTMCell(nn.Module):
 
 
 class ConvLSTM(nn.Module):
+    """Multi-step ConvLSTM that processes an entire frame sequence.
+
+    Wraps a single :class:`ConvLSTMCell` and iterates over the time
+    dimension, collecting the hidden state at every timestep.
+
+    Args:
+        input_dim (int): Number of channels in each input feature map.
+        hidden_dim (int): Number of channels in the hidden state.
+    """
 
     def __init__(self, input_dim, hidden_dim):
         super().__init__()
@@ -46,7 +77,15 @@ class ConvLSTM(nn.Module):
         self.cell = ConvLSTMCell(input_dim, hidden_dim)
 
     def forward(self, x):
+        """Process a sequence of feature maps through the ConvLSTM cell.
 
+        Args:
+            x (torch.Tensor): Input sequence, shape (B, T, C, H, W).
+
+        Returns:
+            torch.Tensor: Hidden states for all timesteps,
+            shape (B, T, hidden_dim, H, W).
+        """
         B, T, C, H, W = x.shape
 
         h = torch.zeros(B, self.cell.hidden_dim, H, W).to(x.device)
@@ -65,7 +104,20 @@ class ConvLSTM(nn.Module):
 
 
 def build_decoder(input_dim):
+    """Build the shared transposed-convolution decoder head.
 
+    Progressively upsamples the feature map by a factor of 2 five times,
+    from the encoder spatial resolution back to the original input size,
+    producing a single-channel lane probability map in [0, 1].
+
+    Args:
+        input_dim (int): Number of input channels to the first
+            transposed convolution.
+
+    Returns:
+        nn.Sequential: Decoder module with five upsampling blocks and a
+        final sigmoid activation.
+    """
     return nn.Sequential(
 
         nn.ConvTranspose2d(input_dim, 128, 2, stride=2),
@@ -86,6 +138,16 @@ def build_decoder(input_dim):
 
 
 class ConvLSTMLaneDetectionModel(nn.Module):
+    """Temporal lane segmentation model using a ConvLSTM.
+
+    Encodes each frame in a sequence with a shared ResNet-18 backbone,
+    feeds the resulting feature sequence through a ConvLSTM to capture
+    temporal dependencies, then decodes the final hidden state into a
+    pixel-wise lane probability map.
+
+    Input shape:  (B, T, 3, H, W)
+    Output shape: (B, 1, H, W)
+    """
 
     def __init__(self):
         super().__init__()
@@ -99,7 +161,15 @@ class ConvLSTMLaneDetectionModel(nn.Module):
         self.decoder = build_decoder(256)
 
     def forward(self, x):
+        """Run the ConvLSTM lane detection model on a frame sequence.
 
+        Args:
+            x (torch.Tensor): Input sequence, shape (B, T, 3, H, W).
+
+        Returns:
+            torch.Tensor: Lane probability map, shape (B, 1, H, W),
+            values in [0, 1].
+        """
         B, T, C, H, W = x.shape
 
         features = []
@@ -119,6 +189,16 @@ class ConvLSTMLaneDetectionModel(nn.Module):
 
 
 class CNNLaneDetectionModel(nn.Module):
+    """CNN baseline lane segmentation model without recurrence.
+
+    Encodes each frame in a sequence with a shared ResNet-18 backbone,
+    aggregates temporal features by mean pooling across the time dimension,
+    projects the aggregated map with two convolutional layers, then decodes
+    it into a pixel-wise lane probability map.
+
+    Input shape:  (B, T, 3, H, W)
+    Output shape: (B, 1, H, W)
+    """
 
     def __init__(self):
         super().__init__()
@@ -137,7 +217,15 @@ class CNNLaneDetectionModel(nn.Module):
         self.decoder = build_decoder(256)
 
     def forward(self, x):
+        """Run the CNN baseline lane detection model on a frame sequence.
 
+        Args:
+            x (torch.Tensor): Input sequence, shape (B, T, 3, H, W).
+
+        Returns:
+            torch.Tensor: Lane probability map, shape (B, 1, H, W),
+            values in [0, 1].
+        """
         B, T, C, H, W = x.shape
 
         features = []
@@ -157,12 +245,25 @@ class CNNLaneDetectionModel(nn.Module):
 
 
 class LaneDetectionModel(ConvLSTMLaneDetectionModel):
+    """Alias for ConvLSTMLaneDetectionModel retained for backward compatibility."""
 
     pass
 
 
 def get_model(model_type="convlstm"):
+    """Instantiate and return the requested lane detection model.
 
+    Args:
+        model_type (str): Architecture to build. ``'convlstm'`` returns
+            :class:`ConvLSTMLaneDetectionModel`; ``'cnn'`` returns
+            :class:`CNNLaneDetectionModel`.
+
+    Returns:
+        nn.Module: Instantiated model (weights not loaded).
+
+    Raises:
+        ValueError: If ``model_type`` is not ``'convlstm'`` or ``'cnn'``.
+    """
     if model_type == "convlstm":
         return ConvLSTMLaneDetectionModel()
 

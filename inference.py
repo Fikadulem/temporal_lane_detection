@@ -9,6 +9,18 @@ from model import get_model
 
 
 def resolve_weights_path(model_type, weights_path=None):
+    """Resolve the checkpoint file path for the given model type.
+
+    Uses the explicit path when provided. Falls back to ``lane_model.pth``
+    for ConvLSTM or ``lane_model_<model_type>.pth`` for other types.
+
+    Args:
+        model_type (str): One of ``'convlstm'`` or ``'cnn'``.
+        weights_path (str, optional): Explicit checkpoint path override.
+
+    Returns:
+        str: Resolved path to the checkpoint file.
+    """
     if weights_path is not None:
         return weights_path
 
@@ -19,10 +31,17 @@ def resolve_weights_path(model_type, weights_path=None):
 
 
 def parse_args():
+    """Parse and return command-line arguments for video inference.
+
+    Returns:
+        argparse.Namespace: Parsed arguments including model type, weights
+        path, video path, sequence length, image size, output directory,
+        and detection threshold.
+    """
     parser = argparse.ArgumentParser(description="Run lane detection inference on a video.")
     parser.add_argument("--weights", default=None, type=str)
     parser.add_argument("--model_type", default="convlstm", choices=["convlstm", "cnn"])
-    parser.add_argument("--video_path", default="challenge (1).mp4", type=str)
+    parser.add_argument("--video_path", default="test_video.mp4", type=str)
     parser.add_argument("--seq_len", default=5, type=int)
     parser.add_argument("--img_size", default=224, type=int)
     parser.add_argument("--output_dir", default="inference_output", type=str)
@@ -46,7 +65,17 @@ model.eval()
 
 
 def draw_classic_lanes(frame):
+    """Draw lane lines on a frame using classical computer vision.
 
+    Applies Gaussian blur, Canny edge detection, a trapezoidal ROI mask,
+    and probabilistic Hough line detection to find and draw lane candidates.
+
+    Args:
+        frame (numpy.ndarray): BGR input frame.
+
+    Returns:
+        numpy.ndarray: Frame with detected Hough lane lines blended in.
+    """
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(blur, 70, 180)
@@ -81,7 +110,21 @@ def draw_classic_lanes(frame):
 
 
 def draw_detected_lane_lines(frame, prob, threshold=0.35):
+    """Fit and draw left and right lane lines from a model probability map.
 
+    Thresholds the probability map, splits predicted lane pixels into left
+    and right halves, fits a linear curve to each side, and draws the
+    resulting lines onto the frame.
+
+    Args:
+        frame (numpy.ndarray): BGR input frame.
+        prob (numpy.ndarray): Lane probability map, shape (H, W), values in [0, 1].
+        threshold (float): Probability threshold for binarising the map.
+
+    Returns:
+        tuple[numpy.ndarray, int]: Frame with lane lines drawn and the
+        number of lane lines successfully fitted (0, 1, or 2).
+    """
     h, w = frame.shape[:2]
     mask = cv2.resize((prob > threshold).astype(np.uint8), (w, h))
 

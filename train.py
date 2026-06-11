@@ -8,6 +8,12 @@ from model import get_model
 
 
 def parse_args():
+    """Parse and return command-line arguments for training.
+
+    Returns:
+        argparse.Namespace: Parsed arguments including dataset paths, model
+        type, training hyperparameters, and output checkpoint path.
+    """
     parser = argparse.ArgumentParser(description="Train lane detection models.")
     parser.add_argument("--frames_path", default="dataset/frames", type=str)
     parser.add_argument("--masks_path", default="dataset/masks", type=str)
@@ -22,6 +28,13 @@ def parse_args():
 
 
 def main():
+    """Run the full training pipeline.
+
+    Builds the dataset and data loader, instantiates the selected model
+    (ConvLSTM or CNN baseline), and trains it with binary cross-entropy
+    loss and the Adam optimizer for the specified number of epochs.
+    Saves the trained model weights to disk when training is complete.
+    """
     args = parse_args()
 
     dataset = LaneVideoDataset(

@@ -10,6 +10,19 @@ from model import get_model
 
 
 def resolve_weights_path(model_type, weights_path=None):
+    """Resolve the checkpoint path to load.
+
+    If an explicit path is provided it is used directly. Otherwise a default
+    path is derived from the model type: ConvLSTM maps to ``lane_model.pth``
+    and CNN to ``lane_model_<model_type>.pth``.
+
+    Args:
+        model_type (str): One of ``'convlstm'`` or ``'cnn'``.
+        weights_path (str, optional): Explicit checkpoint path.
+
+    Returns:
+        str: Resolved path to the checkpoint file.
+    """
     if weights_path is not None:
         return weights_path
 
@@ -20,6 +33,21 @@ def resolve_weights_path(model_type, weights_path=None):
 
 
 def compute_batch_metrics(preds, targets, threshold=0.35, eps=1e-8):
+    """Compute pixel-level binary segmentation metrics for one batch.
+
+    Binarises predictions at ``threshold`` and ground-truth at 0.5, then
+    derives confusion-matrix counts and the derived metrics.
+
+    Args:
+        preds (torch.Tensor): Predicted probability map, shape (B, 1, H, W).
+        targets (torch.Tensor): Ground-truth mask, shape (B, 1, H, W).
+        threshold (float): Decision threshold applied to predictions.
+        eps (float): Small constant to avoid division by zero.
+
+    Returns:
+        dict: Keys ``tp``, ``fp``, ``fn``, ``tn``, ``pixel_acc``,
+            ``precision``, ``recall``, ``f1``, ``iou``, ``dice``.
+    """
     preds_bin = (preds >= threshold).float()
     targets_bin = (targets >= 0.5).float()
 
@@ -50,6 +78,22 @@ def compute_batch_metrics(preds, targets, threshold=0.35, eps=1e-8):
 
 
 def evaluate(args):
+    """Run full evaluation on the dataset and print results.
+
+    Loads the model checkpoint, iterates over all sequence batches,
+    accumulates pixel-level confusion counts across batches, and reports
+    dataset-wide segmentation metrics (BCE loss, pixel accuracy, precision,
+    recall, F1, IoU, Dice) together with inference speed statistics
+    (latency per sample, sequences/s, frames/s).
+
+    Args:
+        args (argparse.Namespace): Parsed arguments from :func:`parse_args`.
+
+    Raises:
+        ValueError: If the dataset is empty or the checkpoint does not match
+            the requested model type.
+        FileNotFoundError: If the checkpoint file cannot be found.
+    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     dataset = LaneVideoDataset(
@@ -161,6 +205,12 @@ def evaluate(args):
 
 
 def parse_args():
+    """Parse and return command-line arguments for evaluation.
+
+    Returns:
+        argparse.Namespace: Parsed arguments including dataset paths,
+        checkpoint path, model type, sequence settings, and threshold.
+    """
     parser = argparse.ArgumentParser(description="Evaluate lane segmentation against ground truth masks.")
     parser.add_argument("--frames_path", default="dataset/frames", type=str)
     parser.add_argument("--masks_path", default="dataset/masks", type=str)
